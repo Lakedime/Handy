@@ -720,8 +720,59 @@ fn send_key_combo_via_xdotool(paste_method: &PasteMethod) -> Result<(), String> 
     Ok(())
 }
 
+/// Security hardening: checks the configured external paste script before it
+/// runs. It must be an absolute path to an executable regular file that the
+/// current user owns, that no one else can write, and that is not inside a
+/// system directory, so a tampered setting cannot point at a shell, an
+/// interpreter or another system program and feed it transcript text.
+#[cfg(target_os = "linux")]
+pub(crate) fn validated_external_script(path: &str) -> Result<std::path::PathBuf, String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let raw = std::path::Path::new(path.trim());
+    if !raw.is_absolute() {
+        return Err("External script path must be an absolute path".into());
+    }
+    let resolved = std::fs::canonicalize(raw)
+        .map_err(|e| format!("External script '{}' not found: {}", raw.display(), e))?;
+    let meta = std::fs::metadata(&resolved).map_err(|e| {
+        format!(
+            "Cannot read external script '{}': {}",
+            resolved.display(),
+            e
+        )
+    })?;
+    let mode = meta.permissions().mode();
+    if !meta.is_file() {
+        return Err("External script must be a regular file".into());
+    }
+    if mode & 0o111 == 0 {
+        return Err("External script is not executable (chmod +x it)".into());
+    }
+    if mode & 0o022 != 0 {
+        return Err("External script must not be writable by other users".into());
+    }
+    // SAFETY: getuid has no preconditions and cannot fail.
+    if meta.uid() != unsafe { libc::getuid() } {
+        return Err("External script must be your own script, not a system program".into());
+    }
+    const SYSTEM_DIRS: &[&str] = &[
+        "/usr/", "/bin/", "/sbin/", "/lib/", "/lib32/", "/lib64/", "/libx32/", "/opt/", "/snap/",
+        "/nix/", "/gnu/", "/etc/", "/var/", "/tmp/", "/dev/", "/proc/", "/sys/", "/run/", "/boot/",
+    ];
+    let shown = resolved.to_string_lossy();
+    if SYSTEM_DIRS.iter().any(|dir| shown.starts_with(dir)) {
+        return Err(format!(
+            "External script '{}' is in a system directory; point it at your own script",
+            shown
+        ));
+    }
+    Ok(resolved)
+}
+
 /// Pastes text by invoking an external script.
 /// The script receives the text to paste as a single argument.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn paste_via_external_script(text: &str, script_path: &str) -> Result<(), String> {
     info!("Pasting via external script: {}", script_path);
 
@@ -898,7 +949,20 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
                 .as_ref()
                 .filter(|p| !p.is_empty())
                 .ok_or("External script path is not configured")?;
-            paste_via_external_script(&text, script_path)?;
+            // Security hardening: the script runs with transcript text (which
+            // post-processing can change) as its argument, so it must be the
+            // user's own script, never a shell or system program, and the
+            // method exists only on Linux, where the UI offers it.
+            #[cfg(target_os = "linux")]
+            {
+                let script = validated_external_script(script_path)?;
+                paste_via_external_script(&text, &script.to_string_lossy())?;
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = script_path;
+                return Err("External script paste is only available on Linux".into());
+            }
         }
     }
 
@@ -1086,5 +1150,40 @@ e.g. 28:1 28:0 means pressing on the Enter button on a standard US keyboard.
             .expect("external script should return without waiting for its child");
         fs::remove_file(script_path).expect("remove external script");
         assert!(result.is_ok());
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod external_script_security_tests {
+    use super::validated_external_script;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn refuses_shells_system_programs_and_unsafe_paths() {
+        for bad in [
+            "/bin/sh",
+            "/usr/bin/env",
+            "/usr/bin/python3",
+            "relative/script.sh",
+            "",
+            "/no/such/file",
+        ] {
+            assert!(
+                validated_external_script(bad).is_err(),
+                "should refuse {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_own_script_but_not_when_others_can_write_it() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        let script = dir.join(format!("paste-test-{}.sh", std::process::id()));
+        std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(validated_external_script(script.to_str().unwrap()).is_ok());
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(validated_external_script(script.to_str().unwrap()).is_err());
+        std::fs::remove_file(&script).unwrap();
     }
 }

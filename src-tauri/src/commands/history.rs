@@ -40,7 +40,17 @@ pub async fn get_audio_file_path(
     history_manager: State<'_, Arc<HistoryManager>>,
     file_name: String,
 ) -> Result<String, String> {
+    // Security hardening: only a bare recording file name is accepted, so the
+    // webview cannot resolve paths outside the recordings folder ("..\..\x").
+    if !is_bare_file_name(&file_name) {
+        return Err("Invalid recording file name".to_string());
+    }
     let path = history_manager.get_audio_file_path(&file_name);
+    if !path.is_file() {
+        return Err(
+            "This recording's audio is no longer kept (auto-wipe); its text is".to_string(),
+        );
+    }
     path.to_str()
         .ok_or_else(|| "Invalid file path".to_string())
         .map(|s| s.to_string())
@@ -138,4 +148,48 @@ pub async fn update_recording_retention_period(
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+/// True for a plain file name: no separators, no parent/current-dir parts,
+/// no drive or stream syntax (`C:`, `file:stream`), and no control characters.
+fn is_bare_file_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\', ':', '\0'])
+        && !name.chars().any(char::is_control)
+        && std::path::Path::new(name).file_name() == Some(std::ffi::OsStr::new(name))
+}
+
+#[cfg(test)]
+mod bare_file_name_tests {
+    use super::is_bare_file_name;
+
+    #[test]
+    fn accepts_recording_names() {
+        assert!(is_bare_file_name("handy-1730000000.wav"));
+        assert!(is_bare_file_name("recording 2026-11-02.wav"));
+    }
+
+    #[test]
+    fn rejects_paths_and_traversal() {
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../secret",
+            "..\\..\\Windows\\win.ini",
+            "/etc/passwd",
+            "C:\\Users\\x\\.ssh\\id_rsa",
+            "a/b.wav",
+            "a\\b.wav",
+            "C:x.wav",
+            "file.wav:stream",
+            "bad\0.wav",
+            "bad\n.wav",
+        ] {
+            assert!(!is_bare_file_name(bad), "should reject {bad:?}");
+        }
+    }
 }

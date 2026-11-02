@@ -1,0 +1,27 @@
+name: "Hardened Windows Build"
+
+# Builds the security-hardened fork for Windows x64 (unsigned: the upstream
+# Azure code-signing identity and updater key are not available to forks).
+# The installer is uploaded as a workflow artifact for 30 days.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [hardened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build.yml
+    with:
+      platform: "windows-latest"
+      target: "x86_64-pc-windows-msvc"
+      build-args: ""
+      asset-prefix: "handy-hardened"
+      upload-artifacts: true
+      sign-binaries: false

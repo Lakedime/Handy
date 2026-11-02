@@ -102,6 +102,11 @@ tauri-plugin-global-shortcut = "2.3.1"
 tauri-plugin-single-instance = "2.3.2"
 tauri-plugin-updater = "2.10.1"
 
+# Security upgrade: post-processing API keys live in the OS credential store
+# (Windows Credential Manager / macOS Keychain) instead of settings_store.json.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+keyring = { version = "3", features = ["windows-native", "apple-native"] }
+
 [target.'cfg(windows)'.dependencies]
 # Used to reach ICoreWebView2Settings3 through the webview's controller
 # (disabling browser accelerator keys in the main window). Must match the

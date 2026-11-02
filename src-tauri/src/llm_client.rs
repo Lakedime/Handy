@@ -242,6 +242,17 @@ fn shared_client() -> Result<&'static reqwest::Client, String> {
         return Ok(client);
     }
     let client = reqwest::Client::builder()
+        // Security hardening: never follow a redirect that downgrades to plain
+        // HTTP on a public host; the request carries the API key and transcript.
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 5 {
+                attempt.error("too many redirects")
+            } else if is_secure_or_local(attempt.url()) {
+                attempt.follow()
+            } else {
+                attempt.error("refusing a redirect to an unencrypted http:// endpoint")
+            }
+        }))
         .pool_idle_timeout(Duration::from_secs(30))
         .tcp_keepalive(Duration::from_secs(15))
         .connect_timeout(Duration::from_secs(10))
@@ -250,8 +261,88 @@ fn shared_client() -> Result<&'static reqwest::Client, String> {
     Ok(SHARED.get_or_init(|| client))
 }
 
+/// True for https://, or for http:// to this machine or a private-network
+/// host (a local Ollama or LM Studio server), where TLS is not expected.
+fn is_secure_or_local(url: &reqwest::Url) -> bool {
+    match url.scheme() {
+        "https" => true,
+        "http" => url.host_str().is_some_and(is_local_host),
+        _ => false,
+    }
+}
+
+fn is_local_host(host: &str) -> bool {
+    use std::net::IpAddr;
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return match ip {
+            IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+            IpAddr::V6(v6) => {
+                let first = v6.segments()[0];
+                v6.is_loopback()
+                    || (first & 0xfe00) == 0xfc00 // unique local fc00::/7
+                    || (first & 0xffc0) == 0xfe80 // link local fe80::/10
+                    || v6
+                        .to_ipv4_mapped()
+                        .is_some_and(|v4| v4.is_loopback() || v4.is_private())
+            }
+        };
+    }
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    host == "localhost"
+        || [".localhost", ".local", ".lan", ".internal", ".home.arpa"]
+            .iter()
+            .any(|suffix| host.ends_with(suffix))
+}
+
+/// True when the endpoint is this computer (localhost / loopback address).
+fn is_this_machine(base_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base_url.trim()) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return ip.is_loopback();
+    }
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    host == "localhost" || host.ends_with(".localhost")
+}
+
+/// Security hardening: refuse to send an API key and transcript to a public
+/// host over unencrypted HTTP, where anyone on the network path can read both.
+fn ensure_secure_endpoint(base_url: &str) -> Result<(), String> {
+    let url = reqwest::Url::parse(base_url.trim())
+        .map_err(|_| "Invalid post-processing endpoint URL".to_string())?;
+    if is_secure_or_local(&url) {
+        return Ok(());
+    }
+    if url.scheme() == "http" {
+        return Err(format!(
+            "Refusing to send your transcript and API key over unencrypted HTTP to {}. \
+             Use an https:// endpoint; plain http:// is allowed only for localhost or \
+             private-network servers.",
+            url.host_str().unwrap_or("this host")
+        ));
+    }
+    Err(format!(
+        "Unsupported post-processing endpoint scheme '{}': use https://",
+        url.scheme()
+    ))
+}
+
 /// Create an HTTP client with provider-specific headers
 fn create_client(provider: &PostProcessProvider, api_key: &str) -> Result<ProviderClient, String> {
+    ensure_secure_endpoint(&provider.base_url)?;
+    if crate::settings::offline_lock_enabled() && !is_this_machine(&provider.base_url) {
+        return Err(
+            "Offline lock is on: AI post-processing can only use a server on this computer \
+             (localhost). Turn the lock off in Settings to use a remote provider."
+                .to_string(),
+        );
+    }
     Ok(ProviderClient {
         client: shared_client()?,
         headers: build_headers(provider, api_key)?,
@@ -996,5 +1087,43 @@ mod tests {
         )
         .await;
         assert!(result.unwrap_err().contains("truncated"));
+    }
+}
+
+#[cfg(test)]
+mod endpoint_security_tests {
+    use super::ensure_secure_endpoint;
+
+    #[test]
+    fn allows_https_and_local_http() {
+        for ok in [
+            "https://api.openai.com/v1",
+            "https://example.com/anthropic/v1",
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:1234/v1",
+            "http://[::1]:8080/v1",
+            "http://192.168.1.20:11434/v1",
+            "http://10.0.0.5/v1",
+            "http://172.16.4.2/v1",
+            "http://ollama.local:11434/v1",
+            "http://gpu-box.lan/v1",
+        ] {
+            assert!(ensure_secure_endpoint(ok).is_ok(), "should allow {ok}");
+        }
+    }
+
+    #[test]
+    fn refuses_plain_http_to_public_hosts_and_odd_schemes() {
+        for bad in [
+            "http://api.openai.com/v1",
+            "http://8.8.8.8/v1",
+            "http://example.com.evil.io/v1",
+            "http://localhost.evil.com/v1",
+            "ftp://example.com/v1",
+            "file:///etc/passwd",
+            "not a url",
+        ] {
+            assert!(ensure_secure_endpoint(bad).is_err(), "should refuse {bad}");
+        }
     }
 }

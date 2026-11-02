@@ -466,7 +466,16 @@
       }
     },
     "advanced": {
+      "offlineLock": {
+        "label": "Offline lock",
+        "description": "Block every network connection: no model downloads, and AI post-processing only through a server on this computer. Turn it off to download a model."
+      },
+      "autoWipeRecordings": {
+        "label": "Auto-wipe recordings",
+        "description": "Keep audio only for your newest dictation and entries you save. Older audio is deleted automatically; the text is always kept."
+      },
       "groups": {
+        "privacy": "Privacy & security",
         "app": "Приложение",
         "output": "Вывод",
         "transcription": "Транскрипция",

@@ -102,6 +102,9 @@ const settingUpdaters: {
     commands.changeSpokenLanguagesSetting(value as string[]),
   update_checks_enabled: (value) =>
     commands.changeUpdateChecksSetting(value as boolean),
+  offline_lock: (value) => commands.changeOfflineLockSetting(value as boolean),
+  auto_wipe_recordings: (value) =>
+    commands.changeAutoWipeRecordingsSetting(value as boolean),
   show_whats_new_on_update: (value) =>
     commands.changeShowWhatsNewOnUpdateSetting(value as boolean),
   whats_new_last_seen_version: (value) =>

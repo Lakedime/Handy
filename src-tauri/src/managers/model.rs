@@ -1937,6 +1937,9 @@ impl ModelManager {
     /// Download the language detector on its own, tracked and cancelled under
     /// [`LANGUAGE_DETECTOR_ID`] like a model.
     pub async fn download_language_detector(&self) -> Result<()> {
+        if crate::settings::offline_lock_enabled() {
+            anyhow::bail!("Offline lock is on: turn it off in Settings to download models");
+        }
         let cancel_token = CancellationToken::new();
         self.cancel_flags
             .lock()
@@ -2262,6 +2265,9 @@ impl ModelManager {
     }
 
     pub async fn download_model(&self, model_id: &str) -> Result<()> {
+        if crate::settings::offline_lock_enabled() {
+            anyhow::bail!("Offline lock is on: turn it off in Settings to download models");
+        }
         let model_info = {
             let models = self.available_models.lock().unwrap();
             models.get(model_id).cloned()

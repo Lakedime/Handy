@@ -15,6 +15,8 @@ import { PostProcessingToggle } from "../PostProcessingToggle";
 import { AppendTrailingSpace } from "../AppendTrailingSpace";
 import { HistoryLimit } from "../HistoryLimit";
 import { RecordingRetentionPeriodSelector } from "../RecordingRetentionPeriod";
+import { OfflineLockToggle } from "../OfflineLockToggle";
+import { AutoWipeRecordingsToggle } from "../AutoWipeRecordingsToggle";
 import { ExperimentalToggle } from "../ExperimentalToggle";
 import { useSettings } from "../../../hooks/useSettings";
 import { KeyboardImplementationSelector } from "../debug/KeyboardImplementationSelector";
@@ -34,6 +36,11 @@ export const AdvancedSettings: React.FC = () => {
 
   return (
     <div className="max-w-3xl w-full mx-auto space-y-6">
+      <SettingsGroup title={t("settings.advanced.groups.privacy")}>
+        <OfflineLockToggle descriptionMode="tooltip" grouped={true} />
+        <AutoWipeRecordingsToggle descriptionMode="tooltip" grouped={true} />
+      </SettingsGroup>
+
       <SettingsGroup title={t("settings.advanced.groups.app")}>
         <StartHidden descriptionMode="tooltip" grouped={true} />
         <AutostartToggle descriptionMode="tooltip" grouped={true} />

@@ -307,8 +307,21 @@ impl HistoryManager {
         })?;
 
         self.cleanup_old_entries()?;
+        if crate::settings::get_settings(&self.app_handle).auto_wipe_recordings {
+            if let Err(e) = self.wipe_older_recordings() {
+                error!("Failed to wipe older recordings: {}", e);
+            }
+        }
 
         Ok(entry)
+    }
+
+    /// Hardened build (auto-wipe): deletes the audio of every unsaved
+    /// dictation except the newest one, keeping each entry and its text.
+    /// Saved entries and transcribed files keep their audio.
+    fn wipe_older_recordings(&self) -> Result<usize> {
+        let conn = self.get_connection()?;
+        wipe_older_recordings_in(&conn, &self.recordings_dir)
     }
 
     /// Save the entry for a file whose audio is already at `file_name`.
@@ -730,6 +743,31 @@ impl HistoryManager {
     }
 }
 
+/// Deletes the audio of every unsaved dictation except the newest one in
+/// `recordings_dir`, keeping the database rows (and so all text).
+fn wipe_older_recordings_in(conn: &Connection, recordings_dir: &std::path::Path) -> Result<usize> {
+    let mut stmt = conn.prepare(
+        "SELECT file_name FROM transcription_history WHERE saved = 0 AND source_name IS NULL ORDER BY timestamp DESC, id DESC",
+    )?;
+    let file_names: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>("file_name"))?
+        .collect::<std::result::Result<_, _>>()?;
+    let mut wiped = 0;
+    for file_name in file_names.iter().skip(1) {
+        let path = recordings_dir.join(file_name);
+        if path.is_file() {
+            match fs::remove_file(&path) {
+                Ok(()) => wiped += 1,
+                Err(e) => error!("Failed to wipe recording {}: {}", file_name, e),
+            }
+        }
+    }
+    if wiped > 0 {
+        debug!("Auto-wipe removed the audio of {} older recordings", wiped);
+    }
+    Ok(wiped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -894,5 +932,53 @@ mod tests {
             .expect("completed entry exists");
 
         assert_eq!(entry.transcription_text, "dictated");
+    }
+
+    #[test]
+    fn auto_wipe_keeps_newest_saved_and_file_audio_and_all_text() {
+        let conn = setup_conn();
+        let dir = std::env::temp_dir().join(format!("handy-wipe-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for ts in [100, 200, 300, 400] {
+            insert_entry(&conn, ts, &format!("text {ts}"), None);
+            std::fs::write(dir.join(format!("handy-{ts}.wav")), b"RIFF").unwrap();
+        }
+        conn.execute(
+            "UPDATE transcription_history SET saved = 1 WHERE timestamp = 200",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE transcription_history SET source_name = 'meeting.mp3' WHERE timestamp = 100",
+            [],
+        )
+        .unwrap();
+
+        let wiped = wipe_older_recordings_in(&conn, &dir).unwrap();
+
+        assert_eq!(wiped, 1, "only the older unsaved dictation (300) is wiped");
+        assert!(
+            dir.join("handy-400.wav").exists(),
+            "newest dictation keeps audio"
+        );
+        assert!(
+            !dir.join("handy-300.wav").exists(),
+            "older unsaved dictation loses audio"
+        );
+        assert!(
+            dir.join("handy-200.wav").exists(),
+            "saved entry keeps audio"
+        );
+        assert!(
+            dir.join("handy-100.wav").exists(),
+            "transcribed file keeps audio"
+        );
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM transcription_history", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 4, "every entry and its text is kept");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

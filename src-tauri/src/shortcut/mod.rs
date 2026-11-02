@@ -1001,7 +1001,12 @@ pub fn change_paste_method_setting(app: AppHandle, method: String) -> Result<(),
         "none" => PasteMethod::None,
         "shift_insert" => PasteMethod::ShiftInsert,
         "ctrl_shift_v" => PasteMethod::CtrlShiftV,
+        #[cfg(target_os = "linux")]
         "external_script" => PasteMethod::ExternalScript,
+        #[cfg(not(target_os = "linux"))]
+        "external_script" => {
+            return Err("External script paste is only available on Linux".to_string())
+        }
         other => {
             warn!("Invalid paste method '{}', defaulting to ctrl_v", other);
             PasteMethod::CtrlV
@@ -1052,6 +1057,14 @@ pub fn change_external_script_path_setting(
     app: AppHandle,
     path: Option<String>,
 ) -> Result<(), String> {
+    // Security hardening: external-script paste is a Linux-only feature (the
+    // UI only offers it there), so other platforms refuse to store a program
+    // path that later paste calls would execute. On Linux the path is checked
+    // when it runs (clipboard::validated_external_script), not per keystroke.
+    #[cfg(not(target_os = "linux"))]
+    if path.as_deref().is_some_and(|p| !p.trim().is_empty()) {
+        return Err("External script paste is only available on Linux".to_string());
+    }
     let mut settings = settings::get_settings(&app);
     settings.external_script_path = path;
     settings::write_settings(&app, settings);
@@ -1570,4 +1583,33 @@ mod tests {
             assert!(key.parse::<Hotkey>().is_ok(), "HandyKeys rejected {key}");
         }
     }
+}
+
+/// Hardened build: turns the offline lock on or off. While on, Handy makes no
+/// network connections except to this machine (see `settings::offline_lock`).
+#[tauri::command]
+#[specta::specta]
+pub fn change_offline_lock_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.offline_lock = enabled;
+    settings::write_settings(&app, settings);
+    let _ = app.emit(
+        "settings-changed",
+        serde_json::json!({ "setting": "offline_lock", "value": enabled }),
+    );
+    Ok(())
+}
+
+/// Hardened build: turns automatic wiping of older recordings on or off.
+#[tauri::command]
+#[specta::specta]
+pub fn change_auto_wipe_recordings_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.auto_wipe_recordings = enabled;
+    settings::write_settings(&app, settings);
+    let _ = app.emit(
+        "settings-changed",
+        serde_json::json!({ "setting": "auto_wipe_recordings", "value": enabled }),
+    );
+    Ok(())
 }

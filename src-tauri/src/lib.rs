@@ -21,6 +21,7 @@ mod notices;
 mod overlay;
 mod paste_tx;
 pub mod portable;
+mod secret_vault;
 mod secure_input;
 mod settings;
 mod shortcut;
@@ -192,6 +193,23 @@ fn should_force_show_permissions_window(app: &AppHandle) -> bool {
     false
 }
 
+/// Security hardening: the webview may read recordings (history playback) and
+/// nothing else on disk. The static scopes in tauri.conf.json and the default
+/// capability cover `$APPDATA/recordings`; this adds the real directory at
+/// runtime so portable mode (`Data/` next to the exe) keeps working.
+fn allow_recordings_scope(app_handle: &AppHandle, dir: &std::path::Path) {
+    use tauri_plugin_fs::FsExt;
+    if let Err(e) = app_handle
+        .asset_protocol_scope()
+        .allow_directory(dir, false)
+    {
+        log::warn!("Could not allow the recordings folder for audio playback: {e}");
+    }
+    if let Err(e) = app_handle.fs_scope().allow_directory(dir, false) {
+        log::warn!("Could not allow the recordings folder for file reads: {e}");
+    }
+}
+
 fn initialize_core_logic(app_handle: &AppHandle) {
     // Note: Enigo (keyboard/mouse simulation) is NOT initialized here.
     // The frontend is responsible for calling the `initialize_enigo` command
@@ -213,6 +231,7 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     );
     let history_manager =
         Arc::new(HistoryManager::new(app_handle).expect("Failed to initialize history manager"));
+    allow_recordings_scope(app_handle, history_manager.recordings_dir());
 
     // Add managers to Tauri's managed state
     app_handle.manage(recording_manager.clone());
@@ -737,6 +756,8 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_chinese_script_setting,
             shortcut::change_app_language_setting,
             shortcut::change_update_checks_setting,
+            shortcut::change_offline_lock_setting,
+            shortcut::change_auto_wipe_recordings_setting,
             shortcut::change_show_whats_new_on_update_setting,
             shortcut::change_whats_new_last_seen_version_setting,
             shortcut::change_keyboard_implementation_setting,

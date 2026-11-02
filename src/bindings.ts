@@ -447,6 +447,29 @@ async changeUpdateChecksSetting(enabled: boolean) : Promise<Result<null, string>
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Hardened build: turns the offline lock on or off. While on, Handy makes no
+ * network connections except to this machine (see `settings::offline_lock`).
+ */
+async changeOfflineLockSetting(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_offline_lock_setting", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Hardened build: turns automatic wiping of older recordings on or off.
+ */
+async changeAutoWipeRecordingsSetting(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_auto_wipe_recordings_setting", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async changeShowWhatsNewOnUpdateSetting(enabled: boolean) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("change_show_whats_new_on_update_setting", { enabled }) };
@@ -1023,10 +1046,8 @@ async updateRecordingRetentionPeriod(period: string) : Promise<Result<null, stri
 }
 },
 /**
- * Checks if the Mac is a laptop by detecting battery presence
- * 
- * This uses pmset to check for battery information.
- * Returns true if a battery is detected (laptop), false otherwise (desktop)
+ * Stub implementation for non-macOS platforms
+ * Always returns false since laptop detection is macOS-specific
  */
 async isLaptop() : Promise<Result<boolean, string>> {
     try {
@@ -1109,7 +1130,19 @@ shortcut_activation?: ShortcutActivation;
  * Hold-or-toggle only: a press held at least this long is push-to-talk,
  * anything shorter is a tap that locks recording on.
  */
-hold_threshold_ms?: number; audio_feedback?: boolean; audio_feedback_volume?: number; sound_theme?: SoundTheme; start_hidden?: boolean; autostart_enabled?: boolean; update_checks_enabled?: boolean; show_whats_new_on_update?: boolean; 
+hold_threshold_ms?: number; audio_feedback?: boolean; audio_feedback_volume?: number; sound_theme?: SoundTheme; start_hidden?: boolean; autostart_enabled?: boolean; update_checks_enabled?: boolean; 
+/**
+ * Hardened build: when on, Handy makes no network connections at all
+ * (no AI post-processing to remote hosts, no model downloads). Only
+ * this machine (localhost) stays reachable, for a local AI server.
+ */
+offline_lock?: boolean; 
+/**
+ * Hardened build: keep the audio of only the newest dictation (to replay
+ * or retry it) and of entries you saved; older audio is deleted as soon
+ * as a new dictation is stored. Transcribed text is always kept.
+ */
+auto_wipe_recordings?: boolean; show_whats_new_on_update?: boolean; 
 /**
  * The app version whose What's New the user has already seen. Fresh installs
  * default to the current version (nothing is "new" to them). Existing users

@@ -5,6 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use specta::Type;
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
@@ -424,6 +425,16 @@ pub struct AppSettings {
     pub autostart_enabled: bool,
     #[serde(default = "default_update_checks_enabled")]
     pub update_checks_enabled: bool,
+    /// Hardened build: when on, Handy makes no network connections at all
+    /// (no AI post-processing to remote hosts, no model downloads). Only
+    /// this machine (localhost) stays reachable, for a local AI server.
+    #[serde(default)]
+    pub offline_lock: bool,
+    /// Hardened build: keep the audio of only the newest dictation (to replay
+    /// or retry it) and of entries you saved; older audio is deleted as soon
+    /// as a new dictation is stored. Transcribed text is always kept.
+    #[serde(default = "default_auto_wipe_recordings")]
+    pub auto_wipe_recordings: bool,
     #[serde(default = "default_show_whats_new_on_update")]
     pub show_whats_new_on_update: bool,
     /// The app version whose What's New the user has already seen. Fresh installs
@@ -599,6 +610,10 @@ fn default_start_hidden() -> bool {
 
 fn default_autostart_enabled() -> bool {
     false
+}
+
+fn default_auto_wipe_recordings() -> bool {
+    true
 }
 
 fn default_update_checks_enabled() -> bool {
@@ -1010,6 +1025,8 @@ pub fn get_default_settings() -> AppSettings {
         start_hidden: default_start_hidden(),
         autostart_enabled: default_autostart_enabled(),
         update_checks_enabled: default_update_checks_enabled(),
+        offline_lock: false,
+        auto_wipe_recordings: default_auto_wipe_recordings(),
         show_whats_new_on_update: default_show_whats_new_on_update(),
         whats_new_last_seen_version: default_whats_new_last_seen_version(),
         selected_model: "".to_string(),
@@ -1149,21 +1166,51 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
         }
 
         if updated {
-            store.set("settings", serde_json::to_value(&settings).unwrap());
+            persist_settings(&store, &settings);
         }
 
         settings
     } else {
         let default_settings = get_default_settings();
-        store.set("settings", serde_json::to_value(&default_settings).unwrap());
+        persist_settings(&store, &default_settings);
         default_settings
     };
 
     if ensure_post_process_defaults(&mut settings) {
-        store.set("settings", serde_json::to_value(&settings).unwrap());
+        persist_settings(&store, &settings);
     }
 
+    // Keys live in the OS credential vault; a plain-text key still in the
+    // file (older store) is moved into the vault by re-saving.
+    if crate::secret_vault::hydrate(&mut settings.post_process_api_keys) {
+        persist_settings(&store, &settings);
+    }
+    OFFLINE_LOCK.store(settings.offline_lock, Ordering::Relaxed);
+
     settings
+}
+
+/// Hardened build: mirrors `AppSettings::offline_lock` for code that has no
+/// AppHandle (the HTTP client, model downloads).
+static OFFLINE_LOCK: AtomicBool = AtomicBool::new(false);
+
+/// True while the offline lock is on.
+pub fn offline_lock_enabled() -> bool {
+    OFFLINE_LOCK.load(Ordering::Relaxed)
+}
+
+/// Writes settings to the store with API keys moved into the OS credential
+/// vault (see `secret_vault`); keys the vault cannot take stay in the file.
+fn persist_settings<R: tauri::Runtime>(
+    store: &tauri_plugin_store::Store<R>,
+    settings: &AppSettings,
+) {
+    let mut on_disk = settings.clone();
+    on_disk.post_process_api_keys = SecretMap(crate::secret_vault::to_persisted(
+        &settings.post_process_api_keys,
+    ));
+    store.set("settings", serde_json::to_value(&on_disk).unwrap());
+    OFFLINE_LOCK.store(settings.offline_lock, Ordering::Relaxed);
 }
 
 /// Rebuilds settings from a store value that failed to deserialize as a whole.
@@ -1387,7 +1434,11 @@ fn os_languages() -> &'static [String] {
 pub fn update_checks_forced_disabled() -> bool {
     use std::sync::OnceLock;
     static IS_UPDATER_DISABLED: OnceLock<bool> = OnceLock::new();
-    *IS_UPDATER_DISABLED.get_or_init(|| utils::env_flag_enabled("HANDY_DISABLE_UPDATER"))
+    // Hardened build: always off. Its updater would fetch and install the
+    // official release, silently replacing this build and undoing its fixes.
+    const HARDENED_BUILD: bool = true;
+    *IS_UPDATER_DISABLED
+        .get_or_init(|| HARDENED_BUILD || utils::env_flag_enabled("HANDY_DISABLE_UPDATER"))
 }
 
 /// Effective updater state: the user's stored preference, overridden to `false`
@@ -1403,7 +1454,7 @@ pub fn write_settings(app: &AppHandle, settings: AppSettings) {
         .store(crate::portable::store_path(SETTINGS_STORE_PATH))
         .expect("Failed to initialize store");
 
-    store.set("settings", serde_json::to_value(&settings).unwrap());
+    persist_settings(&store, &settings);
 }
 
 pub fn get_bindings(app: &AppHandle) -> HashMap<String, ShortcutBinding> {

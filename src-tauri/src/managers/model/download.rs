@@ -273,6 +273,9 @@ impl ModelManager {
             info!("Starting fresh download of {} from {}", model_id, url);
         }
 
+        if crate::settings::offline_lock_enabled() {
+            anyhow::bail!("Offline lock is on: turn it off in Settings to download models");
+        }
         let client = reqwest::Client::builder()
             .connect_timeout(HTTP_CONNECT_TIMEOUT)
             .build()?;

@@ -466,7 +466,16 @@
       }
     },
     "advanced": {
+      "offlineLock": {
+        "label": "Offline lock",
+        "description": "Block every network connection: no model downloads, and AI post-processing only through a server on this computer. Turn it off to download a model."
+      },
+      "autoWipeRecordings": {
+        "label": "Auto-wipe recordings",
+        "description": "Keep audio only for your newest dictation and entries you save. Older audio is deleted automatically; the text is always kept."
+      },
       "groups": {
+        "privacy": "Privacy & security",
         "app": "App",
         "output": "Output",
         "transcription": "Transcription",
@@ -742,7 +751,7 @@
       "updateChecks": {
         "label": "Check for Updates",
         "description": "Automatically check for new versions of Handy",
-        "lockedDescription": "Disabled by system configuration (HANDY_DISABLE_UPDATER)"
+        "lockedDescription": "Off in this hardened build: updating would install the official release over it"
       },
       "whatsNewPreview": {
         "title": "Preview What's New",
