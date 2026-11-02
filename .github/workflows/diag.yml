@@ -1,0 +1,16 @@
+name: "Diag"
+on:
+  push:
+    branches: [diag-actions]
+jobs:
+  plain:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "actions work"
+  checkout:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: README.md
+      - run: echo "checkout works"
