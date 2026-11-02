@@ -7,10 +7,3 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo "actions work"
-  checkout:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          sparse-checkout: README.md
-      - run: echo "checkout works"
